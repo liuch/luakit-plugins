@@ -146,6 +146,8 @@ local function get_abp_opts(s)
                 if #domains > 0 then opts["domain"] = domains end
             elseif key == "third-party" then
                 opts["third-party"] = not negative
+            elseif key == "match-case" then
+                opts["match-case"] = true
             else
                 opts["unknown"] = true
             end
@@ -180,8 +182,9 @@ abp_to_pattern = function (s)
         s = string.gsub(s, "^|", "%^")
         s = string.gsub(s, "|$", "%$")
 
-        -- Convert to lowercase ($match-case option is not honoured)
-        s = string.lower(s)
+        if not opts or not opts["match-case"] then
+            s = string.lower(s)
+        end
     end
 
     return s, opts
@@ -334,8 +337,17 @@ local function third_party_match(page_domain, domain2, opts)
     return true
 end
 
+local function uri_match(uri_l, uri, pattern, opts)
+    local mcs = opts["match-case"]
+    if not mcs then
+        return string.match(uri_l, pattern)
+    end
+
+    return string.match(uri, pattern)
+end
+
 local function domain_from_uri(uri)
-    local domain = (uri and string.match(string.lower(uri), "^%a+://([^/]*)/?"))
+    local domain = (uri and string.match(uri, "^%a+://([^/]*)/?"))
     -- Strip leading www. www2. etc
     domain = string.match(domain or "", "^www%d?%.(.+)") or domain
     return domain or ""
@@ -344,22 +356,22 @@ end
 -- Tests URI against user-defined filter functions, then whitelist, then blacklist
 match = function (uri, signame, page_uri)
     -- Matching is not case sensitive
-    uri = string.lower(uri)
+    local uri_l = string.lower(uri)
 
     signame = signame or ""
 
     local page_domain, uri_domain
     if signame ~= "navigation-request" then
-        page_domain = domain_from_uri(page_uri)
-        uri_domain = domain_from_uri(uri)
+        page_domain = domain_from_uri(string.lower(page_uri or ""))
+        uri_domain = domain_from_uri(uri_l)
     else
-        page_domain = domain_from_uri(uri)
-        uri_domain = page_uri
+        page_domain = domain_from_uri(uri_l)
+        uri_domain = page_uri or ""
     end
 
     -- Test uri against filterfuncs
     for _, func in ipairs(filterfuncs) do
-        local ret = func(uri)
+        local ret = func(uri_l)
         if ret ~= nil then
             info("adblock: filter function %s returned %s to uri %s", tostring(func), tostring(ret), uri)
             return ret
@@ -371,7 +383,7 @@ match = function (uri, signame, page_uri)
         -- Check for a match to whitelist
         for pattern, opts in pairs(list.whitelist or {}) do
             if third_party_match(page_domain, uri_domain, opts) then
-                if domain_match(page_domain, opts) and string.match(uri, pattern) then
+                if domain_match(page_domain, opts) and uri_match(uri_l, uri, pattern, opts) then
                     info("adblock: allowing %q as pattern %q matched to uri %s", signame, pattern, uri)
                     return true
                 end
@@ -384,7 +396,7 @@ match = function (uri, signame, page_uri)
         -- Check for a match to blacklist
         for pattern, opts in pairs(list.blacklist or {}) do
             if third_party_match(page_domain, uri_domain, opts) then
-                if domain_match(page_domain, opts) and string.match(uri, pattern) then
+                if domain_match(page_domain, opts) and uri_match(uri_l, uri, pattern, opts) then
                     info("adblock: blocking %q as pattern %q matched to uri %s", signame, pattern, uri)
                     return false
                 end
